@@ -1,3 +1,4 @@
+from math import degrees
 from re import A, T
 import numpy as np
 from scipy.spatial.transform import Rotation as R
@@ -78,25 +79,47 @@ def part2_forward_kinematics(joint_name, joint_parent, joint_offset, motion_data
     joint_positions = []
     joint_orientations = []
 
-    index = 0
+
+    index = 1
     for i in range(len(joint_name)):
+
+        if joint_name[i].endswith("_end"):
+            joint_positions.append(parent_position + R.from_quat(parent_orientation).as_matrix() @ joint_offset[i])
+            joint_orientations.append(joint_orientations[joint_parent[i]])
+            continue
+
+        gamma, beta, alpha = np.deg2rad(motion_data[frame_id][3*index:3*index+3])
+                
+        R_x = np.array([
+            [np.cos(alpha), -np.sin(alpha), 0],
+            [np.sin(alpha), np.cos(alpha), 0],
+            [0, 0, 1]
+        ])
+
+        R_y = np.array([
+            [np.cos(beta), 0, np.sin(beta)],
+            [0, 1, 0],
+            [-np.sin(beta), 0, np.cos(beta)]
+        ])
+
+        R_z = np.array([
+            [1, 0, 0],
+            [0, np.cos(gamma), -np.sin(gamma)],
+            [0, np.sin(gamma), np.cos(gamma)]
+        ])
+
         if joint_parent[i] == -1:
             #print(i, index, joint_name[i])
             joint_positions.append(joint_offset[i] + motion_data[frame_id][:3])
-            joint_orientations.append(R.from_euler('XYZ', np.deg2rad(motion_data[frame_id][3:6])).as_quat())
-            index += 2
-        else:
+            joint_orientations.append(R.from_matrix(R_z @ R_y @ R_x).as_quat())
+            index += 1
+        elif not joint_name[i].endswith("_end"):
             parent_position = joint_positions[joint_parent[i]]
             parent_orientation = joint_orientations[joint_parent[i]]
-            joint_positions.append(parent_position + R.from_quat(parent_orientation).apply(joint_offset[i]))
-            #print(i, index, joint_name[i])
-            if joint_name[i].endswith("_end"):
-                joint_orientations.append(parent_orientation)
-            else:
-                joint_orientations.append((R.from_quat(parent_orientation) 
-                                           * R.from_euler('XYZ', np.deg2rad(motion_data[frame_id][3*index:3*index+3]))).as_quat())
-                #joint_orientations.append((R.from_quat(parent_orientation)).as_quat())
-                index += 1
+            joint_positions.append(parent_position + R.from_quat(parent_orientation).as_matrix() @ joint_offset[i])
+            joint_orientations.append(R.from_matrix(R.from_quat(parent_orientation).as_matrix()
+                                                    @ R_z @ R_y @ R_x).as_quat())
+            index += 1
 
     return np.array(joint_positions), np.array(joint_orientations)
 
@@ -144,10 +167,12 @@ def part3_retarget_func(T_pose_bvh_path, A_pose_bvh_path):
         for j in range(len(T_name)):
             motion_data[i][j * 3 + 3: j * 3 + 6] = A_motion[i][motion_source[j * 3 + 3: j * 3 + 6]]
             if j == ls_index:
-                #motion_data[i][j*3+3:j*3+6] = np.rad2deg((R.from_euler('XYZ', np.deg2rad([0, 0, -45])) * R.from_euler('XYZ', np.deg2rad(motion_data[i][j*3+3:j*3+6]))).as_euler('XYZ'))
-                motion_data[i][j*3+5] -= 45
+                motion_data[i][j*3+3:j*3+6] = (R.from_euler('XYZ', [0, 0, -45], degrees=True) 
+                                               * R.from_euler('XYZ', motion_data[i][j*3+3:j*3+6], degrees=True)).as_euler('XYZ', degrees=True)
+                #motion_data[i][j*3+5] -= 45
             if j == rs_index:
-                #motion_data[i][j*3+3:j*3+6] = np.rad2deg((R.from_euler('XYZ', np.deg2rad([0, 0, +45])) * R.from_euler('XYZ', np.deg2rad(motion_data[i][j*3+3:j*3+6]))).as_euler('XYZ'))
-                motion_data[i][j*3+5] += 45
+                motion_data[i][j*3+3:j*3+6] = (R.from_euler('XYZ', [0, 0, +45], degrees=True) 
+                                               * R.from_euler('XYZ', motion_data[i][j*3+3:j*3+6], degrees=True)).as_euler('XYZ', degrees=True)
+                #motion_data[i][j*3+5] += 45
 
     return motion_data
