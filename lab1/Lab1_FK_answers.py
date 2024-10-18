@@ -1,3 +1,4 @@
+from re import A, T
 import numpy as np
 from scipy.spatial.transform import Rotation as R
 
@@ -30,9 +31,35 @@ def part1_calculate_T_pose(bvh_file_path):
     Tips:
         joint_name顺序应该和bvh一致
     """
-    joint_name = None
-    joint_parent = None
-    joint_offset = None
+    with open(bvh_file_path, 'r', encoding='utf-8') as file:
+        lines = file.readlines()
+
+    index = -1
+    stack = [-1]
+    joint_name = []
+    joint_parent = []
+    joint_offset = []
+
+    for line in lines:
+        line = line.strip()
+        tokens = line.split()
+        if tokens[0] == "ROOT" or tokens[0] == "JOINT":
+            joint_parent.append(stack[-1])
+            joint_name.append(tokens[1])
+        elif tokens[0] == "End":
+            joint_parent.append(stack[-1])
+            joint_name.append(joint_name[stack[-1]] + "_end")
+        elif tokens[0] == "{":
+            index += 1
+            stack.append(index)
+        elif tokens[0] == "}" and len(stack) > 0:
+            stack.pop()
+        elif "OFFSET" in line:
+            offset = [float(tokens[i]) for i in range(1, 4)]
+            joint_offset.append(offset)
+        elif "MOTION" in line:
+            break
+
     return joint_name, joint_parent, joint_offset
 
 
@@ -47,10 +74,31 @@ def part2_forward_kinematics(joint_name, joint_parent, joint_offset, motion_data
     Tips:
         1. joint_orientations的四元数顺序为(x, y, z, w)
         2. from_euler时注意使用大写的XYZ
-    """
-    joint_positions = None
-    joint_orientations = None
-    return joint_positions, joint_orientations
+    """   
+    joint_positions = []
+    joint_orientations = []
+
+    index = 0
+    for i in range(len(joint_name)):
+        if joint_parent[i] == -1:
+            #print(i, index, joint_name[i])
+            joint_positions.append(joint_offset[i] + motion_data[frame_id][:3])
+            joint_orientations.append(R.from_euler('XYZ', np.deg2rad(motion_data[frame_id][3:6])).as_quat())
+            index += 2
+        else:
+            parent_position = joint_positions[joint_parent[i]]
+            parent_orientation = joint_orientations[joint_parent[i]]
+            joint_positions.append(parent_position + R.from_quat(parent_orientation).apply(joint_offset[i]))
+            #print(i, index, joint_name[i])
+            if joint_name[i].endswith("_end"):
+                joint_orientations.append(parent_orientation)
+            else:
+                joint_orientations.append((R.from_quat(parent_orientation) 
+                                           * R.from_euler('XYZ', np.deg2rad(motion_data[frame_id][3*index:3*index+3]))).as_quat())
+                #joint_orientations.append((R.from_quat(parent_orientation)).as_quat())
+                index += 1
+
+    return np.array(joint_positions), np.array(joint_orientations)
 
 
 def part3_retarget_func(T_pose_bvh_path, A_pose_bvh_path):
@@ -63,5 +111,43 @@ def part3_retarget_func(T_pose_bvh_path, A_pose_bvh_path):
         两个bvh的joint name顺序可能不一致哦(
         as_euler时也需要大写的XYZ
     """
-    motion_data = None
+    T_name, T_parent, T_offset = part1_calculate_T_pose(T_pose_bvh_path)
+    A_name, A_parent, A_offset = part1_calculate_T_pose(A_pose_bvh_path)
+    A_motion = load_motion_data(A_pose_bvh_path)
+    motion_data = np.zeros((A_motion.shape[0], len(T_name) * 3 + 3), dtype=np.float64)
+    motion_source = np.zeros(len(T_name)*3+3, dtype=np.int32)
+
+    jindex = 0
+    ls_index = rs_index = -1
+    for j in range(len(A_name)):
+        if j == 0:
+            motion_source[0:6] = [0, 1, 2, 3, 4, 5]
+            jindex += 1
+        else:
+            if A_name[j] in T_name and not A_name[j].endswith("_end"):
+                index = -1
+                for k in range(len(T_name)):
+                    if not T_name[k].endswith("_end"):
+                        index += 1
+                    if T_name[k] == A_name[j]:
+                        break
+                if not index == -1:
+                    motion_source[index * 3 + 3: index * 3 + 6] = [jindex * 3 + 3, jindex * 3 + 4, jindex * 3 + 5]
+                if A_name[j] == 'lShoulder':
+                    ls_index = index
+                if A_name[j] == 'rShoulder':
+                    rs_index = index
+                jindex += 1
+    
+    for i in range(A_motion.shape[0]):
+        motion_data[i][0:3] = A_motion[i][0:3]
+        for j in range(len(T_name)):
+            motion_data[i][j * 3 + 3: j * 3 + 6] = A_motion[i][motion_source[j * 3 + 3: j * 3 + 6]]
+            if j == ls_index:
+                #motion_data[i][j*3+3:j*3+6] = np.rad2deg((R.from_euler('XYZ', np.deg2rad([0, 0, -45])) * R.from_euler('XYZ', np.deg2rad(motion_data[i][j*3+3:j*3+6]))).as_euler('XYZ'))
+                motion_data[i][j*3+5] -= 45
+            if j == rs_index:
+                #motion_data[i][j*3+3:j*3+6] = np.rad2deg((R.from_euler('XYZ', np.deg2rad([0, 0, +45])) * R.from_euler('XYZ', np.deg2rad(motion_data[i][j*3+3:j*3+6]))).as_euler('XYZ'))
+                motion_data[i][j*3+5] += 45
+
     return motion_data
